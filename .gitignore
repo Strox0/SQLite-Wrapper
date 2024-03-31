@@ -1,0 +1,8 @@
+﻿################################################################################
+# This .gitignore file was automatically created by Microsoft(R) Visual Studio.
+################################################################################
+
+/.vs/SQLite-Wrapper
+/SQLite-Wrapper.sln
+/SQLite-Wrapper.vcxproj
+/SQLite-Wrapper.vcxproj.filters
