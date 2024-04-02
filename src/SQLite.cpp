@@ -15,17 +15,41 @@ void RemoveChar(std::string& str, char ch)
 }
 
 
-SQLite::SQLite(std::string_view database_path)
+SQLite::SQLite(std::string_view database_path, OpenType o_type)
 {
-	int rc = sqlite3_open(database_path.data(), &m_db);
-	if (rc) {
+	int flag = SQLITE_OPEN_READONLY;
+	if (o_type == OpenType::Create)
+		flag = SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE;
+	else if (o_type == OpenType::Write)
+		flag = SQLITE_OPEN_READWRITE;
 
+	int rc = sqlite3_open_v2(database_path.data(), &m_db, flag, nullptr);
+
+	if (rc) 
+	{
+		m_error = 1;
 	}
 }
 
 SQLite::~SQLite()
 {
 	Close();
+}
+
+void SQLite::Delete(std::string table_name, std::string clause)
+{
+	std::string stm = "DELETE FROM ";
+	RemoveChar(table_name, ' ');
+	stm += table_name;
+	if (!clause.empty())
+	{
+		stm += " WHERE ";
+		stm += clause;
+		stm += ";";
+	}
+	m_mutex.lock();
+	sqlite3_exec(m_db, stm.c_str(), 0, 0, nullptr);
+	m_mutex.unlock();
 }
 
 void SQLite::Close()
@@ -41,7 +65,8 @@ std::vector<SQLite::Colum> SQLite::GetColums(std::string table_name)
 	sqlq += table_name;
 	sqlq += ")";
 	int rc = sqlite3_prepare_v2(m_db, sqlq.c_str(), -1, &stm, NULL);
-	if (rc != SQLITE_OK) {
+	if (rc != SQLITE_OK) 
+	{
 		std::cerr << "Error preparing statement: " << sqlite3_errmsg(m_db) << std::endl;
 		return std::vector<Colum>();
 	}
@@ -59,7 +84,34 @@ std::vector<SQLite::Colum> SQLite::GetColums(std::string table_name)
 	return column_names;
 }
 
-std::vector<SQLite::Row> SQLite::QueryData(std::string table_name, std::vector<std::string> colums)
+void SQLite::Update(std::string table_name, std::vector<SQLite::Values> values, std::string clause)
+{
+	std::string stm = "UPDATE ";
+	RemoveChar(table_name, ' ');
+	stm += table_name;
+	stm += " SET ";
+	for (int i = 0; i < values.size(); i++)
+	{
+		RemoveChar(values[i].colum_name, ' ');
+		stm += values[i].colum_name;
+		stm += " = ";
+		stm += values[i].value;
+		if (i + 1 != values.size())
+			stm += ",";
+	}
+	if (!clause.empty())
+	{
+		stm += " WHERE ";
+		stm += clause;
+		stm += ";";
+	}
+	char* errmsg = nullptr;
+	m_mutex.lock();
+	sqlite3_exec(m_db, stm.c_str(), 0, 0, &errmsg);
+	m_mutex.unlock();
+}
+
+std::vector<SQLite::Row> SQLite::QueryData(std::string table_name, std::vector<std::string> colums, std::string clause)
 {
 	std::vector<SQLite::Row> ret;
 	RemoveChar(table_name, ' ');
@@ -73,13 +125,23 @@ std::vector<SQLite::Row> SQLite::QueryData(std::string table_name, std::vector<s
 	}
 	stm += " FROM ";
 	stm += table_name;
+	if (!clause.empty())
+	{
+		stm += " WHERE ";
+		stm += clause;
+		stm += ';';
+	}
 	sqlite3_stmt* stmt;
-	if (sqlite3_prepare_v2(m_db, stm.c_str(), -1, &stmt, NULL) != SQLITE_OK) {
-		std::cerr << "Error quering\n";
+	m_mutex.lock();
+	if (sqlite3_prepare_v2(m_db, stm.c_str(), -1, &stmt, NULL) != SQLITE_OK) 
+	{
+		std::cerr << "Error preparing statement: " << sqlite3_errmsg(m_db) << std::endl;
+		m_mutex.unlock();
 		return std::vector<Row>();
 	}
 
-	while (sqlite3_step(stmt) == SQLITE_ROW) {
+	while (sqlite3_step(stmt) == SQLITE_ROW) 
+	{
 		std::vector<Data> cols;
 		int col_num = sqlite3_column_count(stmt);
 		for (int i = 0; i < col_num; i++)
@@ -89,7 +151,7 @@ std::vector<SQLite::Row> SQLite::QueryData(std::string table_name, std::vector<s
 			switch (type)
 			{
 			case SQLITE_TEXT:
-				cols.emplace_back(std::string(reinterpret_cast<const char*>(sqlite3_column_text(stmt, i))),DataType::TEXT, col_name);
+				cols.emplace_back(std::string(reinterpret_cast<const char*>(sqlite3_column_text(stmt, i))), DataType::TEXT, col_name);
 				break;
 			case SQLITE_BLOB:
 				cols.emplace_back(sqlite3_column_blob(stmt, i), DataType::VOID, col_name);
@@ -98,7 +160,7 @@ std::vector<SQLite::Row> SQLite::QueryData(std::string table_name, std::vector<s
 				cols.emplace_back(sqlite3_column_double(stmt, i), DataType::DOUBLE, col_name);
 				break;
 			case SQLITE_INTEGER:
-				cols.emplace_back(sqlite3_column_int(stmt,i),DataType::INTEGER,col_name);
+				cols.emplace_back(sqlite3_column_int(stmt, i), DataType::INTEGER, col_name);
 				break;
 			default:
 				break;
@@ -108,10 +170,11 @@ std::vector<SQLite::Row> SQLite::QueryData(std::string table_name, std::vector<s
 	}
 
 	sqlite3_finalize(stmt);
+	m_mutex.unlock();
 	return ret;
 }
 
-void SQLite::CreateTableKey(std::string table_name, std::vector<Colum> colums)
+void SQLite::CreateTableWithKey(std::string table_name, std::vector<Colum> colums)
 {
 	std::string stm = "CREATE TABLE IF NOT EXISTS ";
 	RemoveChar(table_name, ' ');
@@ -126,7 +189,9 @@ void SQLite::CreateTableKey(std::string table_name, std::vector<Colum> colums)
 		stm += TranslatecolumType(colums[i].type);
 	}
 	stm += ");";
+	m_mutex.lock();
 	sqlite3_exec(m_db, stm.c_str(), 0, 0, nullptr);
+	m_mutex.unlock();
 }
 
 void SQLite::CreateTable(std::string table_name, std::vector<Colum> colums)
@@ -135,7 +200,16 @@ void SQLite::CreateTable(std::string table_name, std::vector<Colum> colums)
 	RemoveChar(table_name, ' ');
 	stm += table_name;
 	stm += " (";
-	for (int i = 0; i < colums.size(); i++)
+	RemoveChar(colums[0].name, ' ');
+	stm += colums[0].name;
+	stm += " ";
+	stm += TranslatecolumType(colums[0].type);
+	stm += " UNIQUE";
+	if (colums.size() > 1)
+	{
+		stm += ",";
+	}
+	for (int i = 1; i < colums.size(); i++)
 	{
 		RemoveChar(colums[i].name, ' ');
 		stm += colums[i].name;
@@ -145,7 +219,10 @@ void SQLite::CreateTable(std::string table_name, std::vector<Colum> colums)
 			stm += ",";
 	}
 	stm += ");";
+
+	m_mutex.lock();
 	sqlite3_exec(m_db, stm.c_str(), 0, 0, nullptr);
+	m_mutex.unlock();
 }
 
 void SQLite::Insert(std::string table_name, std::vector<Values> values)
@@ -169,7 +246,24 @@ void SQLite::Insert(std::string table_name, std::vector<Values> values)
 			stm += ",";
 	}
 	stm += ");";
+	m_mutex.lock();
 	sqlite3_exec(m_db, stm.c_str(), 0, 0, nullptr);
+	m_mutex.unlock();
+}
+
+void SQLite::ReIndex(std::string table_name)
+{
+	std::string stm = "REINDEX";
+	if (!table_name.empty())
+	{
+		stm += ' ';
+		RemoveChar(table_name, ' ');
+		stm += table_name;
+	}
+	stm += ";";
+	m_mutex.lock();
+	sqlite3_exec(m_db, stm.c_str(), 0, 0, nullptr);
+	m_mutex.unlock();
 }
 
 std::string SQLite::TranslatecolumType(DataType type)
@@ -192,6 +286,13 @@ std::string SQLite::TranslatecolumType(DataType type)
 		return std::string();
 		break;
 	}
+}
+
+void SQLite::Vacuum()
+{
+	m_mutex.lock();
+	sqlite3_exec(m_db, "VACUUM;", 0, 0, nullptr);
+	m_mutex.unlock();
 }
 
 SQLite::DataType SQLite::TranslatecolumType(const std::string& type)

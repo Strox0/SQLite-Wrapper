@@ -1,13 +1,25 @@
 #pragma once
-#include "sqlite3.h"
+#include "sqlite/sqlite3.h"
 #include <string>
 #include <vector>
 #include <variant>
+#include <mutex>
+
+//Create : Open the database file, or create it if it does not already exist.
+//Read : Open the database file for reading only. Error if the file does not already exist.
+//Write : Open the database file for reading and writing. Error if the file does not already exist.
+enum OpenType
+{
+	Create,
+	Read,
+	Write
+};
+
 
 class SQLite
 {
 public:
-	SQLite(std::string_view database_path);
+	SQLite(std::string_view database_path, OpenType o_type = Create);
 
 	enum class DataType
 	{
@@ -58,12 +70,23 @@ public:
 
 	//No whitespaces allowed
 	void CreateTable(std::string table_name,std::vector<Colum> colums);
-	void CreateTableKey(std::string table_name, std::vector<Colum> colums);
+
+	//Creates a table with an integer primary key
+	void CreateTableWithKey(std::string table_name, std::vector<Colum> colums);
 	void Insert(std::string table_name, std::vector<Values> values);
 	void Close();
 	std::vector<Colum> GetColums(std::string table_name);
 
-	std::vector<Row> QueryData(std::string table_name,std::vector<std::string> collums);
+	//Returns all the data in the table from the specified columns, optionally with a 'WHERE' clause
+	std::vector<Row> QueryData(std::string table_name,std::vector<std::string> collums, std::string clause = "");
+
+	//Update data in the table in the specified columns with an optional 'WHERE' clause
+	void Update(std::string table_name, std::vector<SQLite::Values> values, std::string clause = "");
+
+	void Delete(std::string table_name, std::string clause = "");
+
+	void ReIndex(std::string table_name = "");
+	void Vacuum();
 
 	~SQLite();
 
@@ -73,4 +96,6 @@ private:
 	DataType TranslatecolumType(const std::string& type);
 
 	sqlite3* m_db = nullptr;
+	int m_error = 0;
+	std::mutex m_mutex;
 };
