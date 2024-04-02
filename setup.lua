@@ -30,7 +30,8 @@ project "SQLite-Wrapper"
 
 	files {
 		"src/**.cpp",
-		"src/**.h"
+		"src/**.h",
+		"src/**.c"
 	}
 
 	includedirs {
